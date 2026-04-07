@@ -1,19 +1,20 @@
 import sys
 import os
 import secrets
-from PIL import Image
+import hashlib
 import random
+from PIL import Image
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 
-def derive_key(password: str, salt: bytes) -> bytes:
+def derive_key(password: str, salt: bytes, iterations: int = 200000) -> bytes:
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iterations=100000,
+        iterations=iterations,
         backend=default_backend()
     )
     return kdf.derive(password.encode('utf-8'))
@@ -27,6 +28,14 @@ def encrypt_message(message: str, password: str) -> bytes:
     ciphertext = encryptor.update(message.encode('utf-8')) + encryptor.finalize()
     return salt + nonce + encryptor.tag + ciphertext
 
+def get_rng_from_password(password: str) -> random.Random:
+    order_salt = b'stego_order_salt_v2'
+    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), order_salt, 200000, dklen=32)
+    seed = int.from_bytes(key, 'little')
+    rng = random.Random()
+    rng.seed(seed)
+    return rng
+
 def embed_data_in_image(image_path: str, data: bytes, password: str, output_path: str):
     img = Image.open(image_path).convert('RGB')
     pixels = list(img.getdata())
@@ -38,12 +47,12 @@ def embed_data_in_image(image_path: str, data: bytes, password: str, output_path
     if total_bits > max_bits:
         raise ValueError(f"Изображение слишком мало. Нужно {total_bits} бит, доступно {max_bits}.")
 
-    random.seed(password)
     indices = []
     for i in range(width * height):
         for ch in range(3):
             indices.append((i, ch))
-    random.shuffle(indices)
+    rng = get_rng_from_password(password)
+    rng.shuffle(indices)
 
     data_bits = ''.join(format(byte, '08b') for byte in full_data)
 
@@ -60,7 +69,7 @@ def embed_data_in_image(image_path: str, data: bytes, password: str, output_path
     encoded_img = Image.new('RGB', (width, height))
     encoded_img.putdata(new_pixels)
     encoded_img.save(output_path, 'PNG')
-    print(f"Сообщение успешно скрыто в {output_path}")
+    print(f"[✔] Сообщение успешно скрыто в {output_path}")
 
 def main():
     if len(sys.argv) < 3:
@@ -76,7 +85,7 @@ def main():
         encrypted_data = encrypt_message(message, password)
         embed_data_in_image(input_image, encrypted_data, password, output_image)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"[!] Ошибка: {e}")
 
 if __name__ == "__main__":
     main()

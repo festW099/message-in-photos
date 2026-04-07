@@ -1,4 +1,5 @@
 import sys
+import hashlib
 import random
 from PIL import Image
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -6,12 +7,12 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 
-def derive_key(password: str, salt: bytes) -> bytes:
+def derive_key(password: str, salt: bytes, iterations: int = 200000) -> bytes:
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iterations=100000,
+        iterations=iterations,
         backend=default_backend()
     )
     return kdf.derive(password.encode('utf-8'))
@@ -27,22 +28,30 @@ def decrypt_message(encrypted_data: bytes, password: str) -> str:
     plaintext = decryptor.update(ciphertext) + decryptor.finalize()
     return plaintext.decode('utf-8')
 
+def get_rng_from_password(password: str) -> random.Random:
+    order_salt = b'stego_order_salt_v2'
+    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), order_salt, 200000, dklen=32)
+    seed = int.from_bytes(key, 'little')
+    rng = random.Random()
+    rng.seed(seed)
+    return rng
+
 def extract_data_from_image(image_path: str, password: str) -> bytes:
     img = Image.open(image_path).convert('RGB')
     pixels = list(img.getdata())
     width, height = img.size
 
-    random.seed(password)
     indices = []
     for i in range(width * height):
         for ch in range(3):
             indices.append((i, ch))
-    random.shuffle(indices)
+    rng = get_rng_from_password(password)
+    rng.shuffle(indices)
 
     len_bits = []
     for bit_idx in range(32):
         if bit_idx >= len(indices):
-            raise ValueError("Недостаточно пикселей для длины сообщения.")
+            raise ValueError("Недостаточно пикселей для извлечения длины.")
         pix_idx, channel = indices[bit_idx]
         len_bits.append(pixels[pix_idx][channel] & 1)
 
@@ -70,7 +79,7 @@ def extract_data_from_image(image_path: str, password: str) -> bytes:
 
 def main():
     if len(sys.argv) < 2:
-        print("Использование: python decoding.py пароль")
+        print("Использование: python encryption.py пароль")
         sys.exit(1)
 
     password = sys.argv[1]
@@ -79,9 +88,9 @@ def main():
     try:
         encrypted_data = extract_data_from_image(encoded_image, password)
         message = decrypt_message(encrypted_data, password)
-        print(f"Извлечённое сообщение: {message}")
+        print(f"[✔] Извлечённое сообщение: {message}")
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"[!] Ошибка: {e}")
 
 if __name__ == "__main__":
     main()
