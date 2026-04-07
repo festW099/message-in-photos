@@ -12,14 +12,14 @@
 Вы выбираете изображение и текст. Программа встраивает зашифрованное сообщение в пиксели фото, не меняя его визуального восприятия.
 
 <p align="left">
-  <img src="example/code.png" width="50%">
+  <img src="example/code.png" width="80%">
 </p>
 
 ### Дешифровка
 Чтобы извлечь скрытое сообщение, нужен **ключ**.
 
 <p align="left">
-  <img src="example/decode_.png" width="50%">
+  <img src="example/decode_.png" width="80%">
 </p>
 
 ### Пример работы
