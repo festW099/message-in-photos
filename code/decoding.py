@@ -1,48 +1,87 @@
 import sys
+import random
 from PIL import Image
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
 
-def xor_decrypt(data: bytes, key: bytes) -> bytes:
-    return bytes([data[i] ^ key[i % len(key)] for i in range(len(data))])
+def derive_key(password: str, salt: bytes) -> bytes:
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+        backend=default_backend()
+    )
+    return kdf.derive(password.encode('utf-8'))
 
-def decode_message(image_path: str, key: str) -> str:
+def decrypt_message(encrypted_data: bytes, password: str) -> str:
+    salt = encrypted_data[:16]
+    nonce = encrypted_data[16:28]
+    tag = encrypted_data[28:44]
+    ciphertext = encrypted_data[44:]
+    key = derive_key(password, salt)
+    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag), backend=default_backend())
+    decryptor = cipher.decryptor()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    return plaintext.decode('utf-8')
+
+def extract_data_from_image(image_path: str, password: str) -> bytes:
     img = Image.open(image_path).convert('RGB')
     pixels = list(img.getdata())
+    width, height = img.size
 
-    bits = []
-    for pixel in pixels:
-        for channel in pixel:
-            bits.append(channel & 1)
+    random.seed(password)
+    indices = []
+    for i in range(width * height):
+        for ch in range(3):
+            indices.append((i, ch))
+    random.shuffle(indices)
 
-    all_bytes = []
-    for i in range(0, len(bits), 8):
-        byte_bits = bits[i:i+8]
+    len_bits = []
+    for bit_idx in range(32):
+        if bit_idx >= len(indices):
+            raise ValueError("Недостаточно пикселей для длины сообщения.")
+        pix_idx, channel = indices[bit_idx]
+        len_bits.append(pixels[pix_idx][channel] & 1)
+
+    len_bytes = bytearray()
+    for i in range(0, 32, 8):
+        byte_bits = len_bits[i:i+8]
+        byte_val = int(''.join(str(b) for b in byte_bits), 2)
+        len_bytes.append(byte_val)
+    payload_len = int.from_bytes(len_bytes, 'little')
+
+    data_bits = []
+    for bit_idx in range(32, 32 + payload_len * 8):
+        if bit_idx >= len(indices):
+            raise ValueError("Недостаточно пикселей для извлечения данных.")
+        pix_idx, channel = indices[bit_idx]
+        data_bits.append(pixels[pix_idx][channel] & 1)
+
+    extracted = bytearray()
+    for i in range(0, len(data_bits), 8):
+        byte_bits = data_bits[i:i+8]
         if len(byte_bits) < 8:
             break
-        byte_val = int(''.join(str(b) for b in byte_bits), 2)
-        all_bytes.append(byte_val)
+        extracted.append(int(''.join(str(b) for b in byte_bits), 2))
+    return bytes(extracted)
 
-    if len(all_bytes) < 4:
-        raise ValueError("Недостаточно данных для длины сообщения.")
-
-    msg_len = int.from_bytes(all_bytes[:4], 'little')
-    encrypted_msg = bytes(all_bytes[4:4+msg_len])
-
-    decrypted = xor_decrypt(encrypted_msg, key.encode('utf-8'))
-    try:
-        return decrypted.decode('utf-8')
-    except UnicodeDecodeError:
-        raise ValueError("Неверный ключ или повреждённые данные.")
-
-if __name__ == "__main__":
+def main():
     if len(sys.argv) < 2:
-        print("Использование: python decoding.py ключ")
+        print("Использование: python decoding.py пароль")
         sys.exit(1)
 
-    key = sys.argv[1]
+    password = sys.argv[1]
     encoded_image = "result/encoded_image.png"
 
     try:
-        message = decode_message(encoded_image, key)
+        encrypted_data = extract_data_from_image(encoded_image, password)
+        message = decrypt_message(encrypted_data, password)
         print(f"Извлечённое сообщение: {message}")
     except Exception as e:
         print(f"Ошибка: {e}")
+
+if __name__ == "__main__":
+    main()
